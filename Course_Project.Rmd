@@ -1,0 +1,151 @@
+---
+title: "Practical Machine Learning Course_Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+#### The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+### Background
+
+#### Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Data
+
+#### The training data for this project are available here:
+
+#### https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+#### The test data are available here:
+
+#### https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+#### The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+## Import required libraries and set a seed for repeatability
+```{r lib}
+library(caret)
+library(knitr)
+library(rattle)
+library(rpart.plot)
+library(corrplot)
+library(randomForest)
+set.seed(42)
+```
+
+## Part I: Get and Clean the Data
+
+### Download the data
+```{r import}
+trnurl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+trn <- read.csv(url(trnurl),header=TRUE)
+
+tsturl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+tst <- read.csv(url(tsturl),header=TRUE)
+```
+
+### I partition the training data into a train and test set so that we still have a validation set (3 sets total)
+```{r split}
+split <- createDataPartition(trn$classe, p=0.7, list=FALSE)
+TrainSet <- trn[split, ]
+TestSet  <- trn[-split, ]
+```
+
+### I remove variables that do not change much if at all (variance) since they will have little to no bearing on the model outcome.
+```{r var}
+novar <- nearZeroVar(TrainSet)
+TrainSet <- TrainSet[, -novar]
+TestSet  <- TestSet[, -novar]
+tst <- tst[, -novar]
+dim(TrainSet)
+```
+
+### I remove variables are largely NA's since they too will have little to no bearing on the model outcome and may make the model much worse.
+```{r na}
+nans    <- sapply(TrainSet, function(x) mean(is.na(x))) > 0.95
+TrainSet <- TrainSet[, nans==FALSE]
+TestSet  <- TestSet[, nans==FALSE]
+tst <- tst[, nans==FALSE]
+dim(TrainSet)
+```
+
+
+### I remove variables that are not predictors. (columns 1 to 5)
+```{r labels}
+TrainSet <- TrainSet[, -(1:5)]
+TestSet  <- TestSet[, -(1:5)]
+tst <- tst[, -(1:5)]
+dim(TrainSet)
+```
+
+### Check to see if any remaining variables are highly correlated.
+### A few are, but I am not concerned because the majority are not.
+```{r corr}
+corMatrix <- cor(TrainSet[, -54])
+corrplot(corMatrix, order = "FPC", method = "color", type = "lower", tl.cex = 0.8, tl.col = rgb(0, 0, 0))
+```
+
+## Part II: Build Models
+
+
+### Decision Tree
+```{r Decision Tree}
+df_fit <- rpart(classe ~ ., data=TrainSet, method="class")
+fancyRpartPlot(df_fit)
+
+# prediction on Test dataset
+pred_dt <- predict(df_fit, newdata=TestSet, type="class")
+cm_dt <- confusionMatrix(pred_dt, TestSet$classe)
+cm_dt
+
+plot(cm_dt$table, col = cm_dt$byClass, 
+     main = paste("Decision Tree - Accuracy =",
+                  round(cm_dt$overall['Accuracy'], 4)))
+```
+
+
+### Random Forest
+#### Use the control to enforce cross validation
+#### Because it is using cross validation, the resulting error (1-accuracy) is representative of out-of-sample error. The out-of-sample error is likely to be at or near 0.2%.
+```{r Random Forest}
+ctrl_randomforest <- trainControl(method="cv", number=3, verboseIter=TRUE)
+rf_fit <- train(classe ~ ., data=TrainSet, method="rf", trControl=ctrl_randomforest)
+rf_fit$finalModel
+
+pred_rf <- predict(rf_fit, newdata=TestSet)
+cm_rf <- confusionMatrix(pred_rf, TestSet$classe)
+cm_rf
+
+
+plot(cm_rf$table, col = cm_rf$byClass, 
+     main = paste("Random Forest - Accuracy =",
+                  round(cm_rf$overall['Accuracy'], 4)))
+```
+
+### Generalized Boosted Model
+#### Use the control to enforce cross validation
+#### Because it is using cross validation, the resulting error (1-accuracy) is representative of out-of-sample error. The out-of-sample error is likely to be at or near 1.22%.
+```{r GBM}
+ctrl_gbm <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+gbm_fit  <- train(classe ~ ., data=TrainSet, method = "gbm",
+                    trControl = ctrl_gbm , verbose = FALSE)
+gbm_fit$finalModel
+
+pred_gbm <- predict(gbm_fit, newdata=TestSet)
+cm_gbm <- confusionMatrix(pred_gbm, TestSet$classe)
+cm_gbm
+```
+
+##Part III: Choose Resulting Model
+#### The Random Forest model yielded an accuracy of 99.8% which was the highest accuracy. Decision Tree had an accuracy of 73.51% which makes sense because Random Forest is essentially multiple decision trees averaged together. GBM was comparable to Random Forest in this case at 98.78%. At this point I chose the Random Forest model to for use as it was the best.
+
+#### I then used the model to predict the category that all test values fall into for the quiz:
+```{r quiz_results}
+predict_tst <- predict(rf_fit, newdata=tst)
+predict_tst
+```
+
